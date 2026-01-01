@@ -74,12 +74,29 @@ void SysTick_Handler(void)
 {
   HAL_IncTick();
 }
-/* External variables --------------------------------------------------------*/
-extern LPTIM_HandleTypeDef hlptim;
+/* External variables */
+extern void SX1262_DIO1_Callback(void); /* Defined in main.c */
+extern LPTIM_HandleTypeDef hlptim;      /* Defined in main.c */
 
+/**
+  * @brief This function handles LPTIM1 global interrupt.
+  */
 void LPTIM1_IRQHandler(void)
 {
   HAL_LPTIM_IRQHandler(&hlptim);
+}
+
+/**
+  * @brief This function handles EXTI line 2 and 3 interrupts.
+  */
+void EXTI2_3_IRQHandler(void)
+{
+  /* Check if PA3 (Line 3) triggered */
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_3) != RESET)
+  {
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_3);
+    SX1262_DIO1_Callback();
+  }
 }
 
 /******************************************************************************/
