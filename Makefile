@@ -10,7 +10,7 @@ BUILD_DIR		= Build
 #   PY32F003x4, PY32F003x6, PY32F003x8,
 #   PY32F030x6, PY32F030x8, 
 #   PY32F072xB
-MCU_TYPE		= PY32F003x4
+MCU_TYPE		= PY32F002Bx5
 
 ##### Options #####
 
@@ -29,7 +29,7 @@ FLASH_PROGRM	?= pyocd
 
 ##### Toolchains #######
 
-ARM_TOOLCHAIN	?= /usr/bin
+ARM_TOOLCHAIN	?= C:/ArmGNUToolchain/bin
 
 # path to JLinkExe
 JLINKEXE		?= /opt/SEGGER/JLink/JLinkExe

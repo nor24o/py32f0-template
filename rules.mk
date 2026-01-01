@@ -141,3 +141,13 @@ else ifeq ($(FLASH_PROGRM),pyocd)
 else
 	@echo "FLASH_PROGRM is invalid\n"
 endif
+
+
+erease: $(BDIR)/$(PROJECT).elf
+ifeq ($(FLASH_PROGRM),jlink)
+	$(JLINKEXE) -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command
+else ifeq ($(FLASH_PROGRM),pyocd)
+	$(PYOCD_EXE) erase -t $(PYOCD_DEVICE) --chip --config $(TOP)/Misc/pyocd.yaml
+else
+	@echo "FLASH_PROGRM is invalid\n"
+endif
