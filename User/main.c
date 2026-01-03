@@ -41,6 +41,9 @@ static void APP_SpiConfig(void);
 static void APP_UartConfig(void);
 static void APP_LptimConfig(void);
 static void APP_LockUnusedPins(void);
+
+static void SX_SetSleep(void);
+
 void APP_ErrorHandler(void);
 
 void SX_PowerOn(void);
@@ -69,11 +72,13 @@ int main(void)
   /* 2. Safety Blink (6s) */
   for (int i = 0; i < 12; i++)
   {
+    char *msg = "BOOTING...\r\n";
+    HAL_UART_Transmit(&UartHandle, (uint8_t *)msg, strlen(msg), 100);
     HAL_GPIO_TogglePin(LORA_PWR_PORT, LORA_PWR_PIN);
     HAL_Delay(500);
   }
 
-  /* Start with Power OFF */
+  /* Ensure Radio is OFF */
   SX_PowerOff();
 
   /* Init Data */
@@ -85,29 +90,29 @@ int main(void)
   if (HAL_LPTIM_SetOnce_Start_IT(&hlptim, 2560) != HAL_OK)
     APP_ErrorHandler();
 
-while (1)
+  while (1)
   {
     /* --- ACTIVE PHASE --- */
-    
-    /* 1. Restore UART Pins (AF Mode) */
+    SX_SetSleep();
+    /* 1. Restore UART Pins */
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-    GPIO_InitStruct.Pin       = GPIO_PIN_5 | GPIO_PIN_4;
-    GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull      = GPIO_PULLUP;
-    GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF1_USART1; 
+    GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_4;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF1_USART1;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* 2. Power Up Radio */
-    SX_PowerOn(); 
-    SX_Init();    
+    SX_PowerOn();
+    SX_Init();
 
     /* 3. Send Data */
     myData.packetID++;
     uint8_t buffer[32];
     uint8_t idx = 0;
     buffer[idx++] = '<';
-    idx += sprintf((char*)&buffer[idx], "%d", MY_ID);
+    idx += sprintf((char *)&buffer[idx], "%d", MY_ID);
     buffer[idx++] = '>';
     memcpy(&buffer[idx], &myData, sizeof(myData));
     idx += sizeof(myData);
@@ -116,40 +121,41 @@ while (1)
     SX_Send(buffer, idx);
 
     /* --- SHUTDOWN PHASE --- */
-    
-    /* 4. Kill Radio */
-    SX_PowerOff(); 
 
-    /* 5. Kill UART (Prevents leakage back to PC) */
-    /* Set PB4 (RX) and PB5 (TX) to Analog */
+    /* 4. Kill Radio (Ground Zero) */
+    SX_PowerOff();
+
+    /* 5. Kill UART */
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Pin  = GPIO_PIN_4 | GPIO_PIN_5;
+    GPIO_InitStruct.Pin = GPIO_PIN_4 | GPIO_PIN_5;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-    /* 6. Kill Debug Pins (PA2/PB6) */
-    GPIO_InitStruct.Pin  = GPIO_PIN_2; HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-    GPIO_InitStruct.Pin  = GPIO_PIN_6; HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    /* 6. Kill Debug Pins */
+    GPIO_InitStruct.Pin = GPIO_PIN_2;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    GPIO_InitStruct.Pin = GPIO_PIN_6;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* 7. Disable Clocks */
     HAL_SuspendTick();
     __HAL_RCC_USART1_CLK_DISABLE();
-    __HAL_RCC_SPI1_CLK_DISABLE(); 
-    
+    __HAL_RCC_SPI1_CLK_DISABLE();
+
     /* 8. STOP Mode */
     HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
 
     /* --- WAKEUP --- */
     HAL_ResumeTick();
     __HAL_RCC_USART1_CLK_ENABLE();
-    
+
     /* Restart Timer */
     HAL_LPTIM_SetOnce_Start_IT(&hlptim, 2560);
   }
 }
 
 /* ==========================================
-   LORA POWER MANAGEMENT (THE FIX)
+   LORA POWER MANAGEMENT
    ========================================== */
 
 void SX_PowerOn(void)
@@ -158,42 +164,42 @@ void SX_PowerOn(void)
   HAL_GPIO_WritePin(LORA_PWR_PORT, LORA_PWR_PIN, GPIO_PIN_SET);
   HAL_Delay(15);
 
-  /* 2. Restore Pin Functions (SPI AF, Inputs, etc.) */
+  /* 2. Restore Pin Functions */
   APP_GpioConfig();
   APP_SpiConfig();
 
-  /* 3. Set Control Pins Idle High */
+  /* 3. Set Control Pins High */
   HAL_GPIO_WritePin(LORA_NSS_PORT, LORA_NSS_PIN, GPIO_PIN_SET);
   HAL_GPIO_WritePin(LORA_RST_PORT, LORA_RST_PIN, GPIO_PIN_SET);
 }
+
+
 
 void SX_PowerOff(void)
 {
   /* 1. Turn LDO OFF */
   HAL_GPIO_WritePin(LORA_PWR_PORT, LORA_PWR_PIN, GPIO_PIN_RESET);
 
-  /* 2. CRITICAL: FORCE ALL PINS TO OUTPUT LOW (0V) */
-  /* This eliminates voltage potential between MCU and Radio */
+  /* 2. FORCE ALL PINS TO OUTPUT LOW (0V) */
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 
-  /* Group 1: NSS (PA4), RST (PA1), BUSY (PA0), DIO1 (PA3) */
-  /* Note: We drive Inputs (BUSY/DIO) Low too, just to be safe */
+  /* Group 1: NSS, RST, BUSY, DIO1 -> LOW */
   GPIO_InitStruct.Pin = GPIO_PIN_4 | GPIO_PIN_1 | GPIO_PIN_0 | GPIO_PIN_3;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4 | GPIO_PIN_1 | GPIO_PIN_0 | GPIO_PIN_3, GPIO_PIN_RESET);
 
-  /* Group 2: SCK (PA5), MISO (PA6), MOSI (PA7) */
+  /* Group 2: SCK, MISO, MOSI -> LOW */
   GPIO_InitStruct.Pin = GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_RESET);
 }
 
 /* ==========================================
-   LORA DRIVER
+   DRIVER
    ========================================== */
 void SX_Init(void)
 {
@@ -205,37 +211,37 @@ void SX_Init(void)
 
   uint8_t buf[8];
   buf[0] = 0x00;
-  SX_WriteCmd(0x80, buf, 1); /* Standby */
+  SX_WriteCmd(0x80, buf, 1);
   buf[0] = 0x01;
-  SX_WriteCmd(0x8A, buf, 1); /* LoRa */
+  SX_WriteCmd(0x8A, buf, 1);
   buf[0] = 0x36;
   buf[1] = 0x40;
   buf[2] = 0x00;
   buf[3] = 0x00;
-  SX_WriteCmd(0x86, buf, 4); /* Freq */
+  SX_WriteCmd(0x86, buf, 4);
   buf[0] = 0x02;
   buf[1] = 0x03;
   buf[2] = 0x00;
   buf[3] = 0x01;
-  SX_WriteCmd(0x95, buf, 4); /* PA */
+  SX_WriteCmd(0x95, buf, 4);
   buf[0] = 14;
   buf[1] = 0x04;
-  SX_WriteCmd(0x8E, buf, 2); /* TxPower */
+  SX_WriteCmd(0x8E, buf, 2);
   buf[0] = 0x00;
   buf[1] = 0x00;
-  SX_WriteCmd(0x8F, buf, 2); /* Buffer */
+  SX_WriteCmd(0x8F, buf, 2);
   buf[0] = 0x09;
   buf[1] = 0x04;
   buf[2] = 0x01;
   buf[3] = 0x00;
-  SX_WriteCmd(0x8B, buf, 4); /* Mod */
+  SX_WriteCmd(0x8B, buf, 4);
   buf[0] = 0x00;
   buf[1] = 0x08;
   buf[2] = 0x00;
   buf[3] = 0xFF;
   buf[4] = 0x01;
   buf[5] = 0x00;
-  SX_WriteCmd(0x8C, buf, 6); /* Pkt */
+  SX_WriteCmd(0x8C, buf, 6);
 }
 
 void SX_Send(uint8_t *payload, uint8_t len)
@@ -321,13 +327,31 @@ static void APP_LockUnusedPins(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
+
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
+  /* Port F is NOT available in this HAL header, assuming Pin 4 is handled by default */
 
+  /* Port B Unused */
   GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_7;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* Port C Unused */
   GPIO_InitStruct.Pin = GPIO_PIN_1;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+}
+
+
+static void SX_SetSleep(void)
+{
+  /* Opcode 0x84, Param 0x04 (Warm start) */
+  uint8_t tx[2] = {0x84, 0x01}; 
+  
+  SX_WaitBusy();
+  
+  HAL_GPIO_WritePin(LORA_NSS_PORT, LORA_NSS_PIN, GPIO_PIN_RESET);
+  HAL_SPI_Transmit(&hspi1, tx, 2, 100);
+  HAL_GPIO_WritePin(LORA_NSS_PORT, LORA_NSS_PIN, GPIO_PIN_SET);
 }
 
 static void APP_GpioConfig(void)
