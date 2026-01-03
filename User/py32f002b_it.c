@@ -1,109 +1,30 @@
-/**
-  ******************************************************************************
-  * @file    py32f002b_it.c
-  * @author  MCU Application Team
-  * @brief   Interrupt Service Routines.
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) Puya Semiconductor Co.
-  * All rights reserved.</center></h2>
-  *
-  * <h2><center>&copy; Copyright (c) 2016 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
-  *
-  ******************************************************************************
-  */
-
-/* Includes ------------------------------------------------------------------*/
 #include "py32f002b_hal.h"
 #include "py32f002b_it.h"
 
-/* Private includes ----------------------------------------------------------*/
-/* Private typedef -----------------------------------------------------------*/
-/* Private define ------------------------------------------------------------*/
-/* Private macro -------------------------------------------------------------*/
-/* Private variables ---------------------------------------------------------*/
-/* Private function prototypes -----------------------------------------------*/
-/* Private user code ---------------------------------------------------------*/
-/* External variables --------------------------------------------------------*/
+/* --- Handlers --- */
+void NMI_Handler(void) {}
+void HardFault_Handler(void) { while (1); }
+void SVC_Handler(void) {}
+void PendSV_Handler(void) {}
+void SysTick_Handler(void) { HAL_IncTick(); }
 
-/******************************************************************************/
-/*          Cortex-M0+ Processor Interruption and Exception Handlers          */
-/******************************************************************************/
-/**
-  * @brief This function handles Non maskable interrupt.
-  */
-void NMI_Handler(void)
-{
-}
+/* --- External Links --- */
+extern void SX1262_DIO1_Callback(void);
+extern LPTIM_HandleTypeDef hlptim;
 
-/**
-  * @brief This function handles Hard fault interrupt.
-  */
-void HardFault_Handler(void)
-{
-  while (1)
-  {
-  }
-}
+/* --- Peripheral IRQs --- */
 
-/**
-  * @brief This function handles System service call via SWI instruction.
-  */
-void SVC_Handler(void)
-{
-}
-
-/**
-  * @brief This function handles Pendable request for system service.
-  */
-void PendSV_Handler(void)
-{
-}
-
-/**
-  * @brief This function handles System tick timer.
-  */
-void SysTick_Handler(void)
-{
-  HAL_IncTick();
-}
-/* External variables */
-extern void SX1262_DIO1_Callback(void); /* Defined in main.c */
-extern LPTIM_HandleTypeDef hlptim;      /* Defined in main.c */
-
-/**
-  * @brief This function handles LPTIM1 global interrupt.
-  */
 void LPTIM1_IRQHandler(void)
 {
   HAL_LPTIM_IRQHandler(&hlptim);
 }
 
-/**
-  * @brief This function handles EXTI line 2 and 3 interrupts.
-  */
-void EXTI2_3_IRQHandler(void)
+/* PA4 falls into EXTI 4-15 range */
+void EXTI4_15_IRQHandler(void)
 {
-  /* Check if PA3 (Line 3) triggered */
-  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_3) != RESET)
+  if (__HAL_GPIO_EXTI_GET_IT(GPIO_PIN_4) != RESET)
   {
-    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_3);
+    __HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_4);
     SX1262_DIO1_Callback();
   }
 }
-
-/******************************************************************************/
-/* PY32F002B Peripheral Interrupt Handlers                                     */
-/* Add here the Interrupt Handlers for the used peripherals.                  */
-/* For the available peripheral interrupt handler names,                      */
-/* please refer to the startup file.                                          */
-/******************************************************************************/
-
-/************************ (C) COPYRIGHT Puya *****END OF FILE******************/
