@@ -132,7 +132,7 @@ $(BDIR)/$(PROJECT).elf: $(OBJS) $(TOP)/$(LDSCRIPT)
 clean:
 	rm -rf $(BDIR)/*
 
-flash: $(BDIR)/$(PROJECT).elf
+flashold: $(BDIR)/$(PROJECT).elf
 ifeq ($(FLASH_PROGRM),jlink)
 	$(JLINKEXE) -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command
 else ifeq ($(FLASH_PROGRM),pyocd)
@@ -142,12 +142,21 @@ else
 	@echo "FLASH_PROGRM is invalid\n"
 endif
 
+flash: $(BDIR)/$(PROJECT).elf
+ifeq ($(FLASH_PROGRM),jlink)
+	$(JLINKEXE) -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command
+else ifeq ($(FLASH_PROGRM),pyocd)
+	# Added -f 500k to slow down clock, and --connect=under-reset to hold chip steady
+	$(PYOCD_EXE) load $< -t $(PYOCD_DEVICE) --erase=chip -f 2000k --connect=under-reset --config $(TOP)/Misc/pyocd.yaml
+else
+	@echo "FLASH_PROGRM is invalid\n"
+endif
 
 erease: $(BDIR)/$(PROJECT).elf
 ifeq ($(FLASH_PROGRM),jlink)
 	$(JLINKEXE) -device $(JLINK_DEVICE) -if swd -speed 4000 -JLinkScriptFile $(TOP)/Misc/jlink-script -CommanderScript $(TOP)/Misc/jlink-command
 else ifeq ($(FLASH_PROGRM),pyocd)
-	$(PYOCD_EXE) erase -t $(PYOCD_DEVICE) --chip --config $(TOP)/Misc/pyocd.yaml
+	$(PYOCD_EXE) erase -t $(PYOCD_DEVICE) -f 100000 --chip --config $(TOP)/Misc/pyocd.yaml
 else
 	@echo "FLASH_PROGRM is invalid\n"
 endif
