@@ -8,11 +8,18 @@
    ========================================== */
 /* 0 = LOW POWER MODE (< 2uA)
    1 = DEBUG MODE (1.9mA, UART ON) */
-#define DEBUG_MODE 1
+#define DEBUG_MODE 0
 
 #ifndef FLASH_ACR_SLEEP_PD
 #define FLASH_ACR_SLEEP_PD (0x1UL << 12U)
 #endif
+
+/* ==========================================
+   WAKEUP CONFIGURATION
+   ========================================== */
+static uint8_t wakeup_count = 0;
+#define WAKEUP_INTERVAL_MINUTES 30  /* Wake every 30 minutes */
+#define SHORT_SLEEP_SECONDS 60      /* Short sleep interval */
 
 /* ==========================================
    MODULE SELECTOR
@@ -51,13 +58,29 @@
 #define UART_TX_PIN GPIO_PIN_5
 #define UART_RX_PIN GPIO_PIN_4
 
-#define BATT_PIN GPIO_PIN_0  /* PA0 */
-#define DS18_PIN GPIO_PIN_3  /* PA3 */
+/* Sensors */
+#define BATT_PIN           GPIO_PIN_3   /* PB2 (ADC_IN0) */
+#define BATT_PORT          GPIOA
+#define BATT_ADC_CHANNEL   ADC_CHANNEL_1 
+
+/* Voltage Divider: (100k+100k)/100k = 2 */
+/* Voltage divider: Connect between Battery+ and LoRa GND (switched) */
+#define BATT_R1         100000   /* 100kΩ */
+#define BATT_R2         100000   /* 100kΩ */
+
+#define BATT_DIVIDER_RATIO 2.4
+#define VREF_MV            3300 
+
+
+#define DS18_PIN GPIO_PIN_2  /* PA3 */
+#define DS18_PORT          GPIOB
+
 #define SWCLK_PIN GPIO_PIN_2 /* PA2 */
 #define SWDIO_PIN GPIO_PIN_6 /* PB6 */
 
 UART_HandleTypeDef UartHandle;
 LPTIM_HandleTypeDef hlptim;
+ADC_HandleTypeDef hadc;
 volatile uint8_t dio1_fired = 0;
 
 #define MY_ID 101
@@ -75,7 +98,7 @@ void Peripherals_Init(void);
 void Enter_Low_Power(void);
 void Serial_Print(const char *format, ...);
 void APP_ErrorHandler(void);
-
+uint16_t ADC_Read_Battery(void);
 /* LoRa */
 void SX_Init(void);
 void SX_PowerOn(void);
@@ -117,14 +140,14 @@ int main(void)
         Serial_Print("\r\n[BOOT] Active\r\n");
         for (int i = 0; i < 6; i++)
         {
-            HAL_GPIO_TogglePin(LORA_PWR_PORT, LORA_PWR_PIN);
-            HAL_Delay(100);
+            //HAL_GPIO_TogglePin(LORA_PWR_PORT, LORA_PWR_PIN);
+            HAL_Delay(1000);
         }
     }
 
     myData.packetID = 0;
     myData.temperature = 2500;
-    myData.batteryMilliVolts = 3300;
+    myData.batteryMilliVolts = ADC_Read_Battery();
 
     while (1)
     {
@@ -140,6 +163,7 @@ int main(void)
         myData.packetID++;
         uint8_t buffer[32];
         uint8_t idx = 0;
+        myData.batteryMilliVolts = ADC_Read_Battery();
         buffer[idx++] = '<';
         idx += sprintf((char *)&buffer[idx], "%d", MY_ID);
         buffer[idx++] = '>';
@@ -152,7 +176,7 @@ int main(void)
 #if DEBUG_MODE
         /* DEBUG: Stay awake */
         Serial_Print(" Waiting (2s)...\r\n");
-        HAL_Delay(10000);
+        HAL_Delay(5000);
 #else
         /* LOW POWER: Deep Sleep */
         Enter_Low_Power();
@@ -182,8 +206,8 @@ void Enter_Low_Power(void)
 
     __HAL_RCC_GPIOB_CLK_ENABLE();
     /* All Analog EXCEPT PB3 (Radio Power) */
-    GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 |
-                          GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7;
+    GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 |
+                          GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_7;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* Keep PB3 Output Low (Radio OFF) */
@@ -283,9 +307,9 @@ void Peripherals_Init(void)
     HAL_GPIO_Init(SPI_MISO_PORT, &init);
 
     /* Sensors Analog */
-    init.Pin = BATT_PIN | DS18_PIN;
+    init.Pin = BATT_PIN;
     init.Mode = GPIO_MODE_ANALOG;
-    HAL_GPIO_Init(GPIOA, &init);
+    HAL_GPIO_Init(BATT_PORT, &init);
 
     UartHandle.Instance = USART1;
     UartHandle.Init.BaudRate = 9600;
@@ -570,7 +594,64 @@ void SX_WaitBusy(void)
     }
 }
 
+uint16_t ADC_Read_Battery(void) {
+    uint32_t adc_val = 0;
+    ADC_ChannelConfTypeDef sConfig = {0};
 
+    /* 1. Enable Clocks */
+    __HAL_RCC_ADC_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE(); /* PA3 is on GPIOA */
+
+    /* 2. Configure GPIO (PA3 as Analog) */
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = BATT_PIN; 
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(BATT_PORT, &GPIO_InitStruct);
+
+    /* 3. ADC Reset & Init */
+    __HAL_RCC_ADC_FORCE_RESET();
+    __HAL_RCC_ADC_RELEASE_RESET();
+    
+    hadc.Instance = ADC1;
+    hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4; 
+    hadc.Init.Resolution = ADC_RESOLUTION_12B;
+    hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+    hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD; 
+    hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+    hadc.Init.LowPowerAutoWait = ENABLE;
+    hadc.Init.ContinuousConvMode = DISABLE;
+    hadc.Init.DiscontinuousConvMode = DISABLE;
+    hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+    hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    hadc.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+    
+    if (HAL_ADC_Init(&hadc) != HAL_OK) return 0;
+
+    /* 4. Calibration */
+    HAL_ADCEx_Calibration_Start(&hadc);
+
+    /* 5. Configure Channel 2 (PA3) */
+    sConfig.Channel = BATT_ADC_CHANNEL; // ADC_CHANNEL_2
+    sConfig.Rank = ADC_RANK_CHANNEL_NUMBER; 
+    sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5; 
+    if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK) return 0;
+
+    /* 6. Start & Read */
+    HAL_ADC_Start(&hadc);
+    if (HAL_ADC_PollForConversion(&hadc, 10) == HAL_OK) {
+        adc_val = HAL_ADC_GetValue(&hadc);
+    }
+    HAL_ADC_Stop(&hadc);
+    
+    /* 7. Cleanup */
+    HAL_ADC_DeInit(&hadc);
+    __HAL_RCC_ADC_CLK_DISABLE();
+
+    /* Convert to Millivolts */
+    uint32_t mv = ((uint32_t)adc_val * 3300 ) / 4095;
+    return (uint16_t)(mv * BATT_DIVIDER_RATIO);
+}
 
 void Serial_Print(const char *format, ...)
 {
