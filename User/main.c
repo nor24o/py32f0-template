@@ -8,7 +8,7 @@
    ========================================== */
 /* 0 = LOW POWER MODE (< 2uA)
    1 = DEBUG MODE (1.9mA, UART ON) */
-#define DEBUG_MODE 0
+#define DEBUG_MODE 1
 
 #ifndef FLASH_ACR_SLEEP_PD
 #define FLASH_ACR_SLEEP_PD (0x1UL << 12U)
@@ -18,16 +18,15 @@
    WAKEUP CONFIGURATION
    ========================================== */
 static uint8_t wakeup_count = 0;
-#define WAKEUP_INTERVAL_MINUTES 30  /* Wake every 30 minutes */
-#define SHORT_SLEEP_SECONDS 60      /* Short sleep interval */
+#define WAKEUP_INTERVAL_MINUTES 1 /* Wake every 30 minutes */
+#define SHORT_SLEEP_SECONDS 60    /* Short sleep interval */
 
 /* ==========================================
    MODULE SELECTOR
    Uncomment ONLY ONE of the lines below
    ========================================== */
-#define USE_LLCC68   1   /* Use this for your LLCC68 module */
-//#define USE_SX1262   1   /* Use this for your SX1262 module */
-
+#define USE_LLCC68 1 /* Use this for your LLCC68 module */
+// #define USE_SX1262   1   /* Use this for your SX1262 module */
 
 /* ==========================================
    PINOUT
@@ -59,21 +58,20 @@ static uint8_t wakeup_count = 0;
 #define UART_RX_PIN GPIO_PIN_4
 
 /* Sensors */
-#define BATT_PIN           GPIO_PIN_3   /* PB2 (ADC_IN0) */
-#define BATT_PORT          GPIOA
-#define BATT_ADC_CHANNEL   ADC_CHANNEL_1 
+#define BATT_PIN GPIO_PIN_3 /* PB2 (ADC_IN0) */
+#define BATT_PORT GPIOA
+#define BATT_ADC_CHANNEL ADC_CHANNEL_1
 
 /* Voltage Divider: (100k+100k)/100k = 2 */
 /* Voltage divider: Connect between Battery+ and LoRa GND (switched) */
-#define BATT_R1         100000   /* 100kΩ */
-#define BATT_R2         100000   /* 100kΩ */
+#define BATT_R1 100000 /* 100kΩ */
+#define BATT_R2 100000 /* 100kΩ */
 
 #define BATT_DIVIDER_RATIO 2.4
-#define VREF_MV            3300 
+#define VREF_MV 3300
 
-
-#define DS18_PIN GPIO_PIN_2  /* PA3 */
-#define DS18_PORT          GPIOB
+#define DS18_PIN GPIO_PIN_2 /* PA3 */
+#define DS18_PORT GPIOB
 
 #define SWCLK_PIN GPIO_PIN_2 /* PA2 */
 #define SWDIO_PIN GPIO_PIN_6 /* PB6 */
@@ -140,7 +138,7 @@ int main(void)
         Serial_Print("\r\n[BOOT] Active\r\n");
         for (int i = 0; i < 6; i++)
         {
-            //HAL_GPIO_TogglePin(LORA_PWR_PORT, LORA_PWR_PIN);
+            // HAL_GPIO_TogglePin(LORA_PWR_PORT, LORA_PWR_PIN);
             HAL_Delay(1000);
         }
     }
@@ -151,31 +149,38 @@ int main(void)
 
     while (1)
     {
+        /* Check if it's time to send (only on wakeup_count == 0) */
+        if (wakeup_count == 0)
+        {
 #if !DEBUG_MODE
-        /* WAKEUP: Re-enable GPIOs/SPI/UART/Radio only */
-        Peripherals_Init();
+            /* WAKEUP: Re-enable GPIOs/SPI/UART/Radio only */
+            Peripherals_Init();
 #endif
 
-        /* Activate Radio */
-        SX_PowerOn();
-        SX_Init();
+            /* Activate Radio */
+            SX_PowerOn();
+            SX_Init();
 
-        myData.packetID++;
-        uint8_t buffer[32];
-        uint8_t idx = 0;
-        myData.batteryMilliVolts = ADC_Read_Battery();
-        buffer[idx++] = '<';
-        idx += sprintf((char *)&buffer[idx], "%d", MY_ID);
-        buffer[idx++] = '>';
-        memcpy(&buffer[idx], &myData, sizeof(myData));
-        idx += sizeof(myData);
+            myData.packetID++;
+            uint8_t buffer[32];
+            uint8_t idx = 0;
+            myData.batteryMilliVolts = ADC_Read_Battery();
+            buffer[idx++] = '<';
+            idx += sprintf((char *)&buffer[idx], "%d", MY_ID);
+            buffer[idx++] = '>';
+            memcpy(&buffer[idx], &myData, sizeof(myData));
+            idx += sizeof(myData);
 
-        Serial_Print("[TX] Pkt %d...", myData.packetID);
-        SX_Send(buffer, idx);
+            Serial_Print("[TX] Pkt %d...", myData.packetID);
+            SX_Send(buffer, idx);
+        }
 
 #if DEBUG_MODE
         /* DEBUG: Stay awake */
-        Serial_Print(" Waiting (2s)...\r\n");
+        if (wakeup_count == 0)
+        {
+            Serial_Print(" Waiting (5s)...\r\n");
+        }
         HAL_Delay(5000);
 #else
         /* LOW POWER: Deep Sleep */
@@ -223,7 +228,37 @@ void Enter_Low_Power(void)
 
     /* 4. START TIMER (1280 ticks ~= 5s) */
     /* NOTE: LPTIM is already Inited in main(), just start it */
-    HAL_LPTIM_SetOnce_Start_IT(&hlptim, 1280);
+    // HAL_LPTIM_SetOnce_Start_IT(&hlptim, 1280);
+    /////////////////////////////////////////////////
+
+    /* 4. Calculate sleep time based on wakeup count */
+    uint32_t compare_value;
+
+    /* Calculate how many wakeups needed for the interval */
+    uint8_t wakeups_needed = (WAKEUP_INTERVAL_MINUTES * 60) / SHORT_SLEEP_SECONDS;
+
+    if (wakeup_count >= wakeups_needed - 1)
+    {
+        /* Time to send data next wakeup */
+        wakeup_count = 0;
+        compare_value = (SHORT_SLEEP_SECONDS * 32768) / 128;
+        //Serial_Print("[SLEEP] Next wakeup will SEND (count reset)\r\n");
+    }
+    else
+    {
+        /* Just sleep, don't send next time */
+        wakeup_count++;
+        compare_value = (SHORT_SLEEP_SECONDS * 32768) / 128;
+        //Serial_Print("[SLEEP] Just sleeping (count: %d/%d)\r\n",wakeup_count, wakeups_needed);
+    }
+
+    /* Safety check - don't exceed max LPTIM value */
+    if (compare_value > 65535)
+    {
+        compare_value = 65535;
+    }
+
+    HAL_LPTIM_SetOnce_Start_IT(&hlptim, compare_value);
 
     /* 5. Kill System Clocks */
     HAL_SuspendTick();
@@ -341,18 +376,21 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
 /* ==========================================
    LORA DRIVER (SX1262 Configuration)
    ========================================== */
-void SX_Init(void) {
+void SX_Init(void)
+{
     HAL_GPIO_WritePin(LORA_RST_PORT, LORA_RST_PIN, GPIO_PIN_RESET);
-    HAL_Delay(20); 
+    HAL_Delay(20);
     HAL_GPIO_WritePin(LORA_RST_PORT, LORA_RST_PIN, GPIO_PIN_SET);
-    HAL_Delay(20); 
+    HAL_Delay(20);
     SX_WaitBusy();
 
     uint8_t buf[8];
 
     /* 1. STANDBY & PACKET TYPE (Common) */
-    buf[0]=0x00; SX_WriteCmd(0x80, buf, 1); // Standby RC
-    buf[0]=0x01; SX_WriteCmd(0x8A, buf, 1); // LoRa
+    buf[0] = 0x00;
+    SX_WriteCmd(0x80, buf, 1); // Standby RC
+    buf[0] = 0x01;
+    SX_WriteCmd(0x8A, buf, 1); // LoRa
 
 #if defined(USE_SX1262)
     /* ==========================================
@@ -362,14 +400,19 @@ void SX_Init(void) {
 
     /* 1. Enable TCXO (Required for many SX1262 modules) */
     /* 1.8V (0x02), Delay 5ms */
-    buf[0]=0x02; buf[1]=0x00; buf[2]=0x01; buf[3]=0x40; 
-    SX_WriteCmd(0x97, buf, 4); 
+    buf[0] = 0x02;
+    buf[1] = 0x00;
+    buf[2] = 0x01;
+    buf[3] = 0x40;
+    SX_WriteCmd(0x97, buf, 4);
 
     /* 2. Regulator -> LDO Mode */
-    buf[0]=0x00; SX_WriteCmd(0x96, buf, 1);
+    buf[0] = 0x00;
+    SX_WriteCmd(0x96, buf, 1);
 
     /* 3. Enable DIO2 (RF Switch) */
-    buf[0]=0x01; SX_WriteCmd(0x9D, buf, 1);
+    buf[0] = 0x01;
+    SX_WriteCmd(0x9D, buf, 1);
 
 #elif defined(USE_LLCC68)
     /* ==========================================
@@ -385,40 +428,58 @@ void SX_Init(void) {
 
     /* 3. DIO2 (RF Switch) - Optional but usually safe */
     /* If this fails, comment it out, but usually LLCC68 needs it too. */
-    buf[0]=0x01; SX_WriteCmd(0x9D, buf, 1);
+    buf[0] = 0x01;
+    SX_WriteCmd(0x9D, buf, 1);
 
 #else
-    #error "Please #define USE_LLCC68 or USE_SX1262 at the top!"
+#error "Please #define USE_LLCC68 or USE_SX1262 at the top!"
 #endif
 
     /* ==========================================
        COMMON RF SETTINGS
        ========================================== */
-    
+
     /* Frequency (868MHz) */
-    buf[0]=0x36; buf[1]=0x40; buf[2]=0x00; buf[3]=0x00; 
-    SX_WriteCmd(0x86, buf, 4); 
+    buf[0] = 0x36;
+    buf[1] = 0x40;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    SX_WriteCmd(0x86, buf, 4);
 
     /* PA CONFIG (+22dBm High Power) - Same for both */
     /* paDuty=0x04, hpMax=0x07, deviceSel=0x00, paLut=0x01 */
-    buf[0]=0x04; buf[1]=0x07; buf[2]=0x00; buf[3]=0x01; 
+    buf[0] = 0x04;
+    buf[1] = 0x07;
+    buf[2] = 0x00;
+    buf[3] = 0x01;
     SX_WriteCmd(0x95, buf, 4);
 
     /* TX Params (+22dBm) */
-    buf[0]=22; buf[1]=0x04; 
+    buf[0] = 22;
+    buf[1] = 0x04;
     SX_WriteCmd(0x8E, buf, 2);
 
     /* Buffer Base */
-    buf[0]=0x00; buf[1]=0x00; SX_WriteCmd(0x8F, buf, 2);
+    buf[0] = 0x00;
+    buf[1] = 0x00;
+    SX_WriteCmd(0x8F, buf, 2);
 
     /* Modulation (SF9, BW125) */
-    buf[0]=0x09; buf[1]=0x04; buf[2]=0x01; buf[3]=0x00; 
+    buf[0] = 0x09;
+    buf[1] = 0x04;
+    buf[2] = 0x01;
+    buf[3] = 0x00;
     SX_WriteCmd(0x8B, buf, 4);
 
     /* Packet Params */
-    buf[0]=0x00; buf[1]=0x08; buf[2]=0x00; buf[3]=0xFF; buf[4]=0x01; buf[5]=0x00; 
+    buf[0] = 0x00;
+    buf[1] = 0x08;
+    buf[2] = 0x00;
+    buf[3] = 0xFF;
+    buf[4] = 0x01;
+    buf[5] = 0x00;
     SX_WriteCmd(0x8C, buf, 6);
-    
+
     Serial_Print("[CFG] Radio Config Done.\r\n");
 }
 
@@ -594,7 +655,8 @@ void SX_WaitBusy(void)
     }
 }
 
-uint16_t ADC_Read_Battery(void) {
+uint16_t ADC_Read_Battery(void)
+{
     uint32_t adc_val = 0;
     ADC_ChannelConfTypeDef sConfig = {0};
 
@@ -604,7 +666,7 @@ uint16_t ADC_Read_Battery(void) {
 
     /* 2. Configure GPIO (PA3 as Analog) */
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-    GPIO_InitStruct.Pin = BATT_PIN; 
+    GPIO_InitStruct.Pin = BATT_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(BATT_PORT, &GPIO_InitStruct);
@@ -612,12 +674,12 @@ uint16_t ADC_Read_Battery(void) {
     /* 3. ADC Reset & Init */
     __HAL_RCC_ADC_FORCE_RESET();
     __HAL_RCC_ADC_RELEASE_RESET();
-    
+
     hadc.Instance = ADC1;
-    hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4; 
+    hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
     hadc.Init.Resolution = ADC_RESOLUTION_12B;
     hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-    hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD; 
+    hadc.Init.ScanConvMode = ADC_SCAN_DIRECTION_FORWARD;
     hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
     hadc.Init.LowPowerAutoWait = ENABLE;
     hadc.Init.ContinuousConvMode = DISABLE;
@@ -625,31 +687,34 @@ uint16_t ADC_Read_Battery(void) {
     hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
     hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
     hadc.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
-    
-    if (HAL_ADC_Init(&hadc) != HAL_OK) return 0;
+
+    if (HAL_ADC_Init(&hadc) != HAL_OK)
+        return 0;
 
     /* 4. Calibration */
     HAL_ADCEx_Calibration_Start(&hadc);
 
     /* 5. Configure Channel 2 (PA3) */
     sConfig.Channel = BATT_ADC_CHANNEL; // ADC_CHANNEL_2
-    sConfig.Rank = ADC_RANK_CHANNEL_NUMBER; 
-    sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5; 
-    if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK) return 0;
+    sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
+    sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
+    if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
+        return 0;
 
     /* 6. Start & Read */
     HAL_ADC_Start(&hadc);
-    if (HAL_ADC_PollForConversion(&hadc, 10) == HAL_OK) {
+    if (HAL_ADC_PollForConversion(&hadc, 10) == HAL_OK)
+    {
         adc_val = HAL_ADC_GetValue(&hadc);
     }
     HAL_ADC_Stop(&hadc);
-    
+
     /* 7. Cleanup */
     HAL_ADC_DeInit(&hadc);
     __HAL_RCC_ADC_CLK_DISABLE();
 
     /* Convert to Millivolts */
-    uint32_t mv = ((uint32_t)adc_val * 3300 ) / 4095;
+    uint32_t mv = ((uint32_t)adc_val * 3300) / 4095;
     return (uint16_t)(mv * BATT_DIVIDER_RATIO);
 }
 
