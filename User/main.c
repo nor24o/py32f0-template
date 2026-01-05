@@ -3,12 +3,14 @@
 #include <stdio.h>
 #include <stdarg.h>
 
+#include "ds18b20.h"
+
 /* ==========================================
    CONFIGURATION
    ========================================== */
 /* 0 = LOW POWER MODE (< 2uA)
    1 = DEBUG MODE (1.9mA, UART ON) */
-#define DEBUG_MODE 1
+#define DEBUG_MODE 0
 
 #ifndef FLASH_ACR_SLEEP_PD
 #define FLASH_ACR_SLEEP_PD (0x1UL << 12U)
@@ -69,9 +71,6 @@ static uint8_t wakeup_count = 0;
 
 #define BATT_DIVIDER_RATIO 2.4
 #define VREF_MV 3300
-
-#define DS18_PIN GPIO_PIN_2 /* PA3 */
-#define DS18_PORT GPIOB
 
 #define SWCLK_PIN GPIO_PIN_2 /* PA2 */
 #define SWDIO_PIN GPIO_PIN_6 /* PB6 */
@@ -147,6 +146,29 @@ int main(void)
     myData.temperature = 2500;
     myData.batteryMilliVolts = ADC_Read_Battery();
 
+    /* Initialize DS18B20 with 12-bit resolution */
+    uint8_t ds_status = DS18B20_Init(DS18B20_RESOLUTION_12BIT);
+    if (ds_status == DS18B20_OK)
+    {
+        Serial_Print("[DS18B20] Initialized (12-bit)\r\n");
+
+        /* Read and print ROM address */
+        uint8_t rom[8];
+        if (DS18B20_GetROM(rom) == DS18B20_OK)
+        {
+            Serial_Print("[DS18B20] ROM: ");
+            for (int i = 0; i < 8; i++)
+            {
+                Serial_Print("%02X ", rom[i]);
+            }
+            Serial_Print("\r\n");
+        }
+    }
+    else
+    {
+        Serial_Print("[DS18B20] Init failed: %d\r\n", ds_status);
+    }
+
     while (1)
     {
         /* Check if it's time to send (only on wakeup_count == 0) */
@@ -156,6 +178,20 @@ int main(void)
             /* WAKEUP: Re-enable GPIOs/SPI/UART/Radio only */
             Peripherals_Init();
 #endif
+
+            /* 1. Request Temperature Conversion (takes time) */
+            DS18B20_StartConversion();
+
+            /* 2. Wait for conversion (12-bit needs ~750ms) */
+            /* Since we are using an 8MHz clock, HAL_Delay(750) is safe */
+            HAL_Delay(750);
+
+            /* 3. Read the result into your structure */
+            myData.temperature = DS18B20_ReadTemperature();
+
+            /* Optional: Print for debugging */
+            /* If temp is 2550, it prints "2550" (which means 25.50 C) */
+            Serial_Print("[SENSOR] Temp: %d\r\n", myData.temperature);
 
             /* Activate Radio */
             SX_PowerOn();
@@ -242,14 +278,14 @@ void Enter_Low_Power(void)
         /* Time to send data next wakeup */
         wakeup_count = 0;
         compare_value = (SHORT_SLEEP_SECONDS * 32768) / 128;
-        //Serial_Print("[SLEEP] Next wakeup will SEND (count reset)\r\n");
+        // Serial_Print("[SLEEP] Next wakeup will SEND (count reset)\r\n");
     }
     else
     {
         /* Just sleep, don't send next time */
         wakeup_count++;
         compare_value = (SHORT_SLEEP_SECONDS * 32768) / 128;
-        //Serial_Print("[SLEEP] Just sleeping (count: %d/%d)\r\n",wakeup_count, wakeups_needed);
+        // Serial_Print("[SLEEP] Just sleeping (count: %d/%d)\r\n",wakeup_count, wakeups_needed);
     }
 
     /* Safety check - don't exceed max LPTIM value */
