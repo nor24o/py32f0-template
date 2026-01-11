@@ -1,0 +1,28 @@
+# pyocd.yaml
+target_override: PY32F002Ax5
+frequency: 4000000
+auto_unlock: true
+enable_reset_catchpoint: true
+halt_on_connect: true
+step_into_interrupt: false
+
+# For PY32F002B memory map
+memory_map:
+  - name: flash
+    type: flash
+    start: 0x08000000
+    size: 0x8000
+    access: rx
+    blocksize: 0x400
+  - name: sram
+    type: ram
+    start: 0x20000000
+    size: 0x1000
+    access: rwx
+
+# Uncomment if you have a pack file
+pack:
+  - Misc/Puya.PY32F0xx_DFP.1.1.7.pack
+
+flash: true
+log_level: warning
